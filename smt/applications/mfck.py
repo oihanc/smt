@@ -632,7 +632,7 @@ class MFCK(KrgBased):
     def _compute_K(self, A: np.ndarray, B: np.ndarray, param):
         """
         Compute the covariance matrix K between A and B
-            Modified for MFCK initial test (Same theta for each dimmension)
+            Modified for MFCK initial test (Same theta for each dimension)
         """
         # Compute pairwise componentwise L1-distances between A and B
         dx = differences(A, B)
@@ -647,3 +647,70 @@ class MFCK(KrgBased):
         R = r.reshape(A.shape[0], B.shape[0])
         K = param[0] * R
         return K
+
+    def predict_level_covariances(self, x: np.ndarray, lvli: int, lvlj: int = None):
+        """
+        Compute the covariance between two fidelity levels at location x.
+        Parameters
+        ----------
+        x : np.ndarray
+            Array with the inputs for make the prediction.
+        lvli : int
+            First fidelity level.
+        lvlj : int
+            Second fidelity level. If not specified, will be set to the highest fidelity level.
+        Returns
+        -------
+        covariances: (np.array)
+            Returns the posterior covariance.
+        """
+
+        x = (x - self.X_offset) / self.X_scale
+
+        if self.lvl == 1:
+            raise Exception("Fidelity covariances prediction is only for MFCK with multiple fidelity levels.")
+
+        if self.options["eval_noise"]:
+            # TODO
+            raise Exception("Fidelity covariances not implemented for MFCK with noise.")
+
+        if lvlj is None:
+            lvlj = self.lvl - 1
+
+        self.K = self.compute_blockwise_K(self.optimal_theta)
+        L = np.linalg.cholesky(
+            self.K + self.options["nugget"] * np.eye(self.K.shape[0])
+        )
+
+        l_max = max(lvli, lvlj)
+        l_min = min(lvli, lvlj)
+        k_xx = self.compute_cross_K(x, x, l_max, l_min, self.optimal_theta)
+
+        k_xX_i = []
+        k_xX_j = []
+
+        for lvl in range(self.lvl):
+
+            li_max = max(lvli, lvl)
+            li_min = min(lvli, lvl)
+
+            k_xX_i.append(
+                self.compute_cross_K(
+                    self.X_norma_all[lvl], x, li_max, li_min, self.optimal_theta
+                ))
+
+            lj_max = max(lvlj, lvl)
+            lj_min = min(lvlj, lvl)
+
+            k_xX_j.append(
+                self.compute_cross_K(
+                    self.X_norma_all[lvl], x, lj_max, lj_min, self.optimal_theta
+                ))
+
+        beta_i = solve_triangular(L, np.vstack(k_xX_i), lower=True)
+        beta_j = solve_triangular(L, np.vstack(k_xX_j), lower=True)
+
+        covariances = k_xx - np.dot(beta_j.T, beta_i)
+        covariances = np.diag(covariances) * self.y_std**2
+
+        return covariances.reshape(-1, 1)
