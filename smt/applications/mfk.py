@@ -70,7 +70,7 @@ class NestedLHS(object):
         else:
             self.design_space = design_space
 
-    def __call__(self, nb_samples_hifi):
+    def __call__(self, nb_samples_hifi: int | list) -> list[np.ndarray]:
         """
         Builds nlevel nested design of experiments of dimension dim and size n_samples.
         Each doe is built with an optmized LHS procedure.
@@ -81,7 +81,8 @@ class NestedLHS(object):
         ----------
 
         nb_samples_hifi: The number of samples of the highest fidelity model.
-            nb_samples_fi(n-1) = 2 * nb_samples_fi(n)
+            nb_samples_fi(n-1) = 2 * nb_samples_fi(n). If nb_samples_hifi is of type list, then each element
+            specifies the number of samples of the corresponding fidelity level.
 
 
         Returns
@@ -89,9 +90,15 @@ class NestedLHS(object):
 
         list of length nlevel of design of experiemnts from low to high fidelity level.
         """
+
         nt = []
-        for i in range(self.nlevel, 0, -1):
-            nt.append(pow(2, i - 1) * nb_samples_hifi)
+
+        if type(nb_samples_hifi) is int:
+            for i in range(self.nlevel, 0, -1):
+                nt.append(pow(2, i - 1) * nb_samples_hifi)
+
+        elif type(nb_samples_hifi) is list:
+            nt = nb_samples_hifi
 
         if len(nt) != self.nlevel:
             raise ValueError("nt must be a list of nlevel elements")
