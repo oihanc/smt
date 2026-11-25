@@ -77,7 +77,7 @@ def sasena2002_hf(x):
 
 
 def sasena2002_lf(x):
-    return sasena_hf(x) + 0.3 + 0.03 * (x - 3) ** 2
+    return sasena2002_hf(x) + 0.3 + 0.03 * (x - 3) ** 2
 
 
 def build_untrained_model(
@@ -689,11 +689,69 @@ class TestMFCK(SMTestCase):
                     rtol=1e-10,
                 )
 
+    def test_level_covariances_symmetric(self):
+        """cov(i, j) == cov(j, i): swapping the two levels must not change the result."""
+        x = np.linspace(0.0, 1.0, 17).reshape(-1, 1)
+        for kwargs in (
+            dict(eval_noise=False),
+            dict(eval_noise=True, noise0=[1e-3], opt_max_eval=60),
+        ):
+            sm = train_forrester(**kwargs)
+            for include_noise in (True, False):
+                c01 = sm.predict_level_covariances(x, 0, 1, include_noise=include_noise)
+                c10 = sm.predict_level_covariances(x, 1, 0, include_noise=include_noise)
+                self.assertEqual(c01.shape, (17, 1))
+                np.testing.assert_allclose(c01, c10, rtol=1e-10, atol=1e-14)
+                # guard against a vacuous pass (e.g. both calls returning zeros)
+                self.assertGreater(np.max(np.abs(c01)), 1e-6)
+
+    def test_level_covariances_include_noise(self):
+        """include_noise adds exactly the level's noise, and only when lvli == lvlj."""
+        x = np.linspace(0.0, 1.0, 17).reshape(-1, 1)
+        eval_sm = train_forrester(eval_noise=True, noise0=[1e-3], opt_max_eval=60)
+        het_sm, _ = train_het_noise(predict_with_noise=True, opt_max_eval=40)
+
+        def expected_noise(sm, lvl):
+            if sm.options["use_het_noise"]:
+                return sm.predict_noise(x, level=lvl)  # original units, per point
+            noise = np.ravel(sm.optimal_theta[-sm.lvl :][lvl])[0]  # normalized units
+            return float(noise * np.ravel(sm.y_std)[0] ** 2)  # constant, original units
+
+        for sm in (eval_sm, het_sm):
+            for lvl in range(sm.lvl):
+                with_noise = sm.predict_level_covariances(
+                    x, lvl, lvl, include_noise=True
+                )
+                latent = sm.predict_level_covariances(x, lvl, lvl, include_noise=False)
+                self.assertTrue(np.all(with_noise > latent))
+                np.testing.assert_allclose(
+                    (with_noise - latent).ravel(),
+                    expected_noise(sm, lvl),
+                    rtol=1e-8,
+                    atol=1e-12,
+                )
+            # noise is independent across levels: cross-level covariance is unaffected
+            np.testing.assert_allclose(
+                sm.predict_level_covariances(x, 0, 1, include_noise=True),
+                sm.predict_level_covariances(x, 0, 1, include_noise=False),
+                rtol=1e-12,
+                atol=1e-14,
+            )
+
+    def test_level_covariances_invalid_levels(self):
+        """Out-of-range (including negative) level indices raise a ValueError."""
+        sm = train_forrester(eval_noise=False)
+        x = np.array([[0.5]])
+        for lvli, lvlj in ((-1, 0), (0, -1), (0, sm.lvl), (sm.lvl, sm.lvl)):
+            with self.assertRaises(ValueError):
+                sm.predict_level_covariances(x, lvli, lvlj)
+
     def test_level_correlation_vanishes_at_sampled_points(self):
         """
         Posterior LF/HF correlation drops to 0 where either level is already
         sampled, and stays high where neither is (Sasena 2002 test case).
         """
+
         def level_correlation(sm, x, eps=1e-8):
             """corr(f_LF(x), f_HF(x)) | data; 0 where a variance is below eps."""
             c00 = sm.predict_level_covariances(x, 0, 0).ravel()
@@ -712,8 +770,12 @@ class TestMFCK(SMTestCase):
             rho_bounds=[-10.0, 10.0],
             sequential_opt=False,
         )
-        sm.set_training_values(xt[0].reshape(-1, 1), sasena_lf(xt[0]).reshape(-1, 1), name=0)
-        sm.set_training_values(xt[1].reshape(-1, 1), sasena_hf(xt[1]).reshape(-1, 1))
+        sm.set_training_values(
+            xt[0].reshape(-1, 1), sasena2002_lf(xt[0]).reshape(-1, 1), name=0
+        )
+        sm.set_training_values(
+            xt[1].reshape(-1, 1), sasena2002_hf(xt[1]).reshape(-1, 1)
+        )
         with Silence():
             sm.train()
 
